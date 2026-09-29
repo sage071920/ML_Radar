@@ -48,7 +48,9 @@ class Drone(Target):
 
     def __post_init__(self) -> None:
         """Legt einmalig die zufälligen Abweichungen der einzelnen Rotoren fest."""
-        ...
+        rng = np.random.default_rng(self.seed)
+        self.rotor_speed_factors = 1 + rng.uniform(-0.03, 0.03, size=self.n_rotors)
+        self.rotor_phases = rng.uniform(0, 2 * np.pi, size=self.n_rotors)
 
     def echo(self, t: np.ndarray, lam: float) -> np.ndarray:
         """Rumpf + alle Rotorblätter."""
@@ -57,17 +59,14 @@ class Drone(Target):
         signal = 1.0 * np.exp(-1j * 4 * np.pi * R_body / lam)
         omega = 2 * np.pi * self.rpm / 60
         r = np.linspace(0.01, self.blade_len, self.n_points)
-        rng = np.random.default_rng(42)
 
         cos_elev = np.cos(np.deg2rad(self.elev_deg))
 
         for k in range(self.n_rotors):
-            w = omega * (1 + rng.uniform(-0.03, 0.03))   # Rotoren drehen leicht unterschiedlich
-            phi0 = rng.uniform(0, 2 * np.pi)             # zufällige Startstellung
+            w = omega * self.rotor_speed_factors[k]   # Rotoren drehen leicht unterschiedlich
+            phi0 = self.rotor_phases[k]             # zufällige Startstellung
             for b in range(self.n_blades):
                 phi = phi0 + b * 2 * np.pi / self.n_blades
-                # Radiale Auslenkung jedes Punktes: Kreisbewegung, projiziert auf die Sichtlinie
-                # Form: (n_points, Anzahl Samples)
                 dR = np.outer(r, np.cos(w * t + phi)) * cos_elev
                 R_blade = R_body + dR
                 signal += self.amp_point * np.exp(-1j * 4 * np.pi * R_blade / lam).sum(axis=0)
@@ -97,7 +96,30 @@ class Bird(Target):
 
     def echo(self, t: np.ndarray, lam: float) -> np.ndarray:
         """Körper + zwei schlagende Flügel."""
-        ...
+        # Körper: wie bei der Drohne
+        R_body = self.R0 - self.v_body * t
+        signal = self.amp_body * np.exp(-1j * 4 * np.pi * R_body / lam)
+
+        # Flügelwinkel über die Zeit (ein Wert pro Zeitpunkt)
+        theta = np.deg2rad(self.flap_amp_deg) * np.sin(
+            2 * np.pi * self.flap_freq * t + self.flap_phase
+        )
+
+        # Streupunkte entlang eines Flügels
+        r = np.linspace(0.02, self.wing_len, self.n_points)
+        sin_elev = np.sin(np.deg2rad(self.elev_deg))
+
+        # Radiale Auslenkung jedes Flügelpunkts, Form: (n_points, Anzahl Samples)
+        dR = np.outer(r, np.sin(theta)) * sin_elev
+        R_wing = R_body + dR
+        wing_echo = self.amp_point * np.exp(-1j * 4 * np.pi * R_wing / lam).sum(axis=0)
+
+        # Linker und rechter Flügel bewegen sich spiegelbildlich
+        # -> aus Sicht des Radars identisch
+        signal += 2 * wing_echo
+
+        return signal
+
 
     @classmethod
     def random(cls, rng: np.random.Generator) -> Bird:
@@ -112,9 +134,14 @@ class Spectrogram:
     f: np.ndarray       # Frequenzachse [Hz]
     t: np.ndarray       # Zeitachse [s]
     S_db: np.ndarray    # Werte [dB], Form (len(f), len(t))
+    lam: float          # Wellenlänge [m], für die Geschwindigkeitsachse
 
-    def plot(self, ax=None, title: str = "") -> None:
-        ...
+    def plot(self, ax=None, title: str = "", f_lim: tuple[float, float] | None = None,
+             dyn_range: float = 60.0):
+        """Zeichnet das Spektrogramm (Details siehe plotting.plot_spectrogram)."""
+        # Import erst hier: matplotlib wird nur geladen, wenn wirklich geplottet wird
+        from plotting import plot_spectrogram
+        return plot_spectrogram(self, ax=ax, title=title, f_lim=f_lim, dyn_range=dyn_range)
 
 
 # ---------------------------------------------------------
@@ -128,6 +155,11 @@ class Radar:
     snr_db: float = 25.0
     nperseg: int = 256          # STFT-Fensterlänge
     noverlap: int = 240
+    nfft: int | None = None     # FFT-Länge (>= nperseg); größer = Zero-Padding -> feineres Frequenzraster
+
+    def __post_init__(self) -> None:
+        if self.nfft is not None and self.nfft < self.nperseg:
+            raise ValueError("nfft muss >= nperseg sein")
 
     @property
     def lam(self) -> float:
@@ -143,7 +175,6 @@ class Radar:
         """Echo des Ziels + Rauschen = empfangenes Signal."""
         t = self.time_axis
         signal = target.echo(t, self.lam)
-        # ... Rauschen addieren
         p_signal = np.mean(np.abs(signal) ** 2)
         p_noise = p_signal / 10 ** (self.snr_db / 10)
         noise = np.sqrt(p_noise / 2) * (rng.standard_normal(t.size) + 1j * rng.standard_normal(t.size))
@@ -151,9 +182,10 @@ class Radar:
 
     def spectrogram(self, signal: np.ndarray) -> Spectrogram:
         """STFT, fftshift, Umrechnung in dB."""
-        f, t_stft, Z = stft(signal, fs=self.fs, nperseg=self.nperseg, noverlap=self.noverlap, return_onesided=False)
+        f, t_stft, Z = stft(signal, fs=self.fs, nperseg=self.nperseg, noverlap=self.noverlap,
+                             nfft=self.nfft, return_onesided=False)
         f = np.fft.fftshift(f)
         Z = np.fft.fftshift(Z, axes=0)
         S_db = 20 * np.log10(np.abs(Z) + 1e-12)
 
-        return Spectrogram(f=f, t=t_stft, S_db=S_db)
+        return Spectrogram(f=f, t=t_stft, S_db=S_db, lam=self.lam)
