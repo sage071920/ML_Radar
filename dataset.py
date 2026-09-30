@@ -14,6 +14,12 @@ def generate_dataset(radar, n_per_class, rng):
     return np.array(X, dtype=np.float32), np.array(y), spec.f, spec.t
 
 
+def save_dataset(path="data.npz", n_per_class=500, seed=0):
+    radar = Radar(duration=1.0, nperseg=256, noverlap=192)
+    X, y, f, t = generate_dataset(radar, n_per_class, np.random.default_rng(seed))
+
+    np.savez_compressed(path, X=X, y=y, f=f, t=t, radar=np.array(repr(radar)))
+
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
