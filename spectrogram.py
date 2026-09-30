@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.signal import stft
 
+# Wertebereiche für zufällig erzeugte Ziele
+V_RANGE = (-15.0, 15.0)     # Radialgeschwindigkeit [m/s] (negativ = entfernt sich)
+ELEV_RANGE = (0.0, 45.0)    # Blickwinkel [°]
+
 
 # ---------------------------------------------------------
 # Basisklasse: alles, was das Radar "sehen" kann
@@ -75,7 +79,17 @@ class Drone(Target):
 
     @classmethod
     def random(cls, rng: np.random.Generator) -> Drone:
-        ...
+        blade_len = rng.uniform(0.08, 0.20)
+        tip_speed = rng.uniform(50, 120)                      # [m/s], realistischer Bereich
+        rpm = tip_speed / blade_len * 60 / (2 * np.pi)        # v = ω·r  ->  ω = v / r
+        return cls(
+            v_body=rng.uniform(*V_RANGE),
+            rpm=rpm,
+            blade_len=blade_len,
+            n_rotors=int(rng.choice([4, 6, 8])),
+            elev_deg=rng.uniform(*ELEV_RANGE),
+            seed=int(rng.integers(0, 2**31)),
+        )
 
 
 # ---------------------------------------------------------
@@ -123,7 +137,17 @@ class Bird(Target):
 
     @classmethod
     def random(cls, rng: np.random.Generator) -> Bird:
-        ...
+        wing_len = rng.uniform(0.1, 0.6)
+        # Größere Vögel schlagen langsamer: f ≈ 1.5 / wing_len, plus ±15 % Zufall
+        flap_freq = round(1.5 / wing_len * (1 + rng.uniform(-0.15, 0.15)), 3)
+        return cls(
+            flap_amp_deg=rng.uniform(20, 60),
+            wing_len=wing_len,
+            flap_freq=flap_freq,
+            flap_phase=rng.uniform(0, 2 * np.pi),
+            v_body=rng.uniform(*V_RANGE),
+            elev_deg=rng.uniform(*ELEV_RANGE),
+        )
 
 
 # ---------------------------------------------------------
