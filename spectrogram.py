@@ -139,7 +139,7 @@ class Bird(Target):
     def random(cls, rng: np.random.Generator) -> Bird:
         wing_len = rng.uniform(0.1, 0.6)
         # Größere Vögel schlagen langsamer: f ≈ 1.5 / wing_len, plus ±15 % Zufall
-        flap_freq = round(1.5 / wing_len * (1 + rng.uniform(-0.15, 0.15)), 3)
+        flap_freq = 1.5 / wing_len * (1 + rng.uniform(-0.15, 0.15))
         return cls(
             flap_amp_deg=rng.uniform(20, 60),
             wing_len=wing_len,
